@@ -1,0 +1,409 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+
+# Basic Airflow cluster configuration for CeleryExecutor with Redis and PostgreSQL.
+#
+# WARNING: This configuration is for local development. Do not use it in a production deployment.
+#
+# This configuration supports basic configuration using environment variables or an .env file
+# The following variables are supported:
+#
+# AIRFLOW_IMAGE_NAME           - Docker image name used to run Airflow.
+#                                Default: apache/airflow:2.3.3
+# AIRFLOW_UID                  - User ID in Airflow containers
+#                                Default: 50000
+# Those configurations are useful mostly in case of standalone testing/running Airflow in test/try-out mode
+#
+# _AIRFLOW_WWW_USER_USERNAME   - Username for the administrator account (if requested).
+#                                Default: airflow
+# _AIRFLOW_WWW_USER_PASSWORD   - Password for the administrator account (if requested).
+#                                Default: airflow
+# _PIP_ADDITIONAL_REQUIREMENTS - Additional PIP requirements to add when starting all containers.
+#                                Default: ''
+#
+# Feel free to modify this file to suit your needs.
+---
+version: '3'
+x-airflow-common:
+  # & (Амперсанд) - используется для создания якоря, то есть для определения значения, 
+  # которое можно будет ссылаться в другом месте YAML-файла
+  &airflow-common
+  # In order to add custom dependencies or upgrade provider packages you can use your extended image.
+  # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
+  # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
+  # Если переменная окружения AIRFLOW_IMAGE_NAME не установлена, используется образ apache/airflow:2.3.3
+  # в качестве значения по умолчанию
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.3.3}
+  # build: .
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    # For backward compatibility, with Airflow <2.3
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false' # не загружать примеры (если загрузить, исправить на 'true')
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+  # строка задает пользователя и группу, под которыми будет выполняться процесс внутри контейнера.
+  #  В этом случае, если AIRFLOW_UID не определена, процесс будет работать под пользователем с UID 
+  # (User ID) 50000 и группой root. Если AIRFLOW_UID определена, процесс будет работать под пользователем 
+  # с указанным UID и группой root (as 0)
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    &airflow-common-depends-on
+    # redis должен быть запущен и работоспособен перед запуском текущего контейнера 
+    # (обычно Airflow worker и scheduler используют Redis в качестве брокера сообщений)
+    redis:
+      condition: service_healthy
+    # postgres должен быть запущен и работоспособен перед запуском текущего контейнера 
+    # (Airflow использует PostgreSQL в качестве базы данных)
+    #  Redis используется в качестве брокера для задач, поэтому он не хранит постоянные данные,
+    # в то время как PostgreSQL используется для хранения метаданных и конфигурации Airflow, 
+    # и важно, чтобы он был доступен для работы всего стека Airflow
+    postgres:
+      condition: service_healthy
+
+services:
+  # это база данных, предназначенная для работы Apache Airflow. Вы видите параметры POSTGRES_USER,
+  # POSTGRES_PASSWORD и POSTGRES_DB, которые настраивают пользователя, пароль и базу данных, 
+  # которые используются Airflow для подключения к этой PostgreSQL-базе данных
+  # это база данных для управления Airflow-метаданными, а не для ваших собственных данных. 
+  # Если у вас есть свои данные, которые не связаны с Airflow, вам, возможно, понадобится другая база данных
+  #  или другой сервис
+  postgres:
+    image: postgres:13
+    ports:
+      - 5433:5432
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+    # Вы обычно не должны создавать эти директории вручную, они будут автоматически созданы при 
+    # выполнении команды docker-compose up или docker-compose up -d. При каждом запуске контейнера
+    # они будут доступны внутри контейнера для хранения данных и выполнения инициализационных задач
+      - postgres-db-volume:/var/lib/postgresql/data
+      - ./postgres/init_scripts/:/docker-entrypoint-initdb.d/      
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: always
+
+  db:
+    image: postgres
+    ports:
+      - 5430:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: test
+    volumes:
+      - ./ddl/create_table.sql:/docker-entrypoint-initdb.d/init_create_table.sql
+
+  redis:
+  # image: redis:latest указывает Docker использовать образ Redis с тегом "latest".
+  # Это образ Redis, который будет использоваться для запуска Redis-сервера
+    image: redis:latest
+    # expose: - 6379 указывает Docker на экспонирование порта 6379, который используется для связи
+    # с Redis-сервером. Это не открывает порт на хосте, но делает его доступным для других контейнеров в 
+    # той же сети Docke
+    expose:
+      - 6379
+    # healthcheck определяет проверку состояния для контейнера Redis. Здесь указан тест (test), который
+    # будет выполняться для проверки доступности Redis. Этот тест использует redis-cli для отправки команды 
+    # ping к Redis-серверу. Это позволяет контролировать, работает ли Redis-сервер и готов ли он к обработке
+    # запросов
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      # interval: 5s указывает, как часто будет выполняться проверка состояния Redis (каждые 5 секунд)
+      interval: 5s
+      # timeout: 30s определяет, сколько времени Docker должен ждать ответа от Redis перед тем, как считать
+      # проверку состояния неудачной.
+      timeout: 30s
+      # retries: 50 указывает, сколько попыток проверки состояния Redis будет предпринято, прежде чем Docker решит,
+      # что контейнер не работает должным образом.
+      retries: 50
+    # restart: always говорит Docker автоматически перезапускать контейнер Redis в случае его сбоя или завершения
+    restart: always
+
+  # airflow-webserver определяет контейнер, в котором будет развернут веб-сервер Apache Airflow
+  airflow-webserver:
+    # <<: *airflow-common - это способ наследовать параметры из блока airflow-common, который определен
+    # выше в конфигурации Docker Compose. Это значит, что airflow-webserver наследует множество параметров, 
+    # включая образ, переменные окружения и другие настройки, из airflow-common
+    <<: *airflow-common
+    # command: webserver - указывает команду, которая будет выполнена при запуске контейнера. В этом случае,
+    # контейнер запустит веб-сервер Airflow
+    command: webserver
+    ports:
+    # ports: - 8080:8080 - определяет проброс портов, где первое значение (слева) - это порт на хосте,
+    #  а второе значение (справа) - это порт в контейнере. Это означает, что веб-сервер Airflow будет
+    # доступен на порту 8080 на вашем хосте
+      - 8080:8080
+    healthcheck:
+    # healthcheck - определяет проверку состояния контейнера веб-сервера Airflow. Это позволяет Docker
+    # проверять, работает ли веб-сервер правильно. В данном случае, он использует команду curl для проверки
+    # доступности http://localhost:8080/health каждые 10 секунд, с ожиданием ответа в течение 10 секунд, 
+    # и будет предпринимать до 5 попыток
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    # restart: always - указывает Docker перезапускать контейнер веб-сервера Airflow, если он завершается или сбоит
+    restart: always
+    depends_on:
+    # depends_on - определяет зависимости контейнера. В данном случае, контейнер airflow-webserver зависит 
+    # от контейнера airflow-init, и он будет запускаться только после того, как airflow-init успешно 
+    #завершится. Это может быть важно, чтобы убедиться, что база данных и другие зависимости готовы к
+    # использованию до запуска веб-сервера
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Apache Airflow Scheduler отвечает за планирование и запуск задач в соответствии с расписанием, 
+  # определенным в ваших DAG. Этот контейнер Scheduler обеспечивает непрерывное выполнение задач в
+  # Apache Airflow. Этот код определяет контейнер для Apache Airflow Scheduler
+  airflow-scheduler:
+    <<: *airflow-common
+    # command: scheduler - определяет команду, которая будет выполнена при запуске контейнера. В данном 
+    # случае, контейнер будет запущен в режиме планировщика (Scheduler)
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Apache Airflow Worker с CeleryExecutor отвечает за выполнение задач, определенных в ваших DAG, в 
+  # соответствии с расписанием и условиями. Каждый Worker слушает очереди задач и выполняет их, когда они 
+  # доступны. Этот контейнер Worker обеспечивает параллельное выполнение задач в Apache Airflow
+  airflow-worker:
+  # <<: *airflow-common - так же, как и в предыдущих случаях, это наследует параметры из блока 
+  # airflow-common, чтобы использовать общие настройки и образ для контейнера Worker
+    <<: *airflow-common
+    # command: celery worker - определяет команду, которая будет выполнена при запуске контейнера. 
+    # В данном случае, контейнер будет запущен в роли Celery worker.
+    command: celery worker
+    healthcheck:
+    # healthcheck - определяет проверку состояния контейнера Worker. Это используется Docker для проверки
+    #  работоспособности контейнера. Проверка выполняется с помощью команды 
+    # celery --app airflow.executors.celery_executor.app inspect ping, которая проверяет, работает ли Celery
+    # worker. Эта проверка выполняется каждые 10 секунд, с ожиданием ответа в течение 10 секунд,
+    # и Docker будет предпринимать до 5 попыток. Это гарантирует, что Worker работает правильно
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    environment:
+    # environment - определяет переменные окружения контейнера. Он наследует значения из блока
+    # airflow-common-env, а также устанавливает DUMB_INIT_SETSID: "0", что является частью обработки 
+    # сигналов для корректной остановки рабочих процессов Celery
+      <<: *airflow-common-env
+      # Required to handle warm shutdown of the celery workers properly
+      # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
+      DUMB_INIT_SETSID: "0"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+  # Triggerer в Apache Airflow отвечает за проверку условий выполнения задач и, если условия выполнены, 
+  # создает и планирует дополнительные задачи для выполнения. Это позволяет создавать сложные рабочие 
+  # процессы, которые реагируют на различные условия и события
+  # Контейнер airflow-triggerer в Docker Compose файле предназначен для запуска процесса Triggerer в
+  #  Apache Airflow
+    <<: *airflow-common
+    command: triggerer
+    # command: triggerer - это команда, которая будет выполнена при запуске контейнера. Она запускает
+    #  процесс Triggerer, который отвечает за запуск дополнительных задач при выполнении условий в ваших DAG
+    healthcheck:
+    # healthcheck - определяет проверку состояния контейнера Triggerer. Проверка выполняется с помощью 
+    # команды "airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}". Эта проверка 
+    # проверяет работоспособность процесса Triggerer, чтобы убедиться, что он работает правильно.
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Контейнер airflow-init в Docker Compose файле выполняет инициализацию и настройку Apache Airflow 
+  # перед запуском. Этот контейнер служит для проверки окружения и настройки Apache Airflow перед его
+  # запуском, чтобы гарантировать, что все необходимые зависимости и настройки присутствуют и правильно 
+  # настроены
+  airflow-init:
+    <<: *airflow-common
+    # entrypoint: /bin/bash - указывает контейнеру запускать оболочку Bash.
+    entrypoint: /bin/bash
+    # yamllint disable rule:line-length
+    command:
+    # command - это команда, которая будет выполнена при запуске контейнера. Эта команда выполняет 
+    # несколько проверок, таких как проверка версии Apache Airflow, наличие необходимых ресурсов 
+    # (памяти, процессоров, места на диске) и наличие переменной окружения AIRFLOW_UID.
+      - -c
+      - |
+        function ver() {
+          printf "%04d%04d%04d%04d" $${1//./ }
+        }
+        airflow_version=$$(AIRFLOW__LOGGING__LOGGING_LEVEL=INFO && gosu airflow airflow version)
+        airflow_version_comparable=$$(ver $${airflow_version})
+        min_airflow_version=2.2.0
+        min_airflow_version_comparable=$$(ver $${min_airflow_version})
+        if (( airflow_version_comparable < min_airflow_version_comparable )); then
+          echo
+          echo -e "\033[1;31mERROR!!!: Too old Airflow version $${airflow_version}!\e[0m"
+          echo "The minimum Airflow version supported: $${min_airflow_version}. Only use this or higher!"
+          echo
+          exit 1
+        fi
+        if [[ -z "${AIRFLOW_UID}" ]]; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: AIRFLOW_UID not set!\e[0m"
+          echo "If you are on Linux, you SHOULD follow the instructions below to set "
+          echo "AIRFLOW_UID environment variable, otherwise files will be owned by root."
+          echo "For other operating systems you can get rid of the warning with manually created .env file:"
+          echo "    See: https://airflow.apache.org/docs/apache-airflow/stable/start/docker.html#setting-the-right-airflow-user"
+          echo
+        fi
+        one_meg=1048576
+        mem_available=$$(($$(getconf _PHYS_PAGES) * $$(getconf PAGE_SIZE) / one_meg))
+        cpus_available=$$(grep -cE 'cpu[0-9]+' /proc/stat)
+        disk_available=$$(df / | tail -1 | awk '{print $$4}')
+        warning_resources="false"
+        if (( mem_available < 4000 )) ; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough memory available for Docker.\e[0m"
+          echo "At least 4GB of memory required. You have $$(numfmt --to iec $$((mem_available * one_meg)))"
+          echo
+          warning_resources="true"
+        fi
+        if (( cpus_available < 2 )); then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough CPUS available for Docker.\e[0m"
+          echo "At least 2 CPUs recommended. You have $${cpus_available}"
+          echo
+          warning_resources="true"
+        fi
+        if (( disk_available < one_meg * 10 )); then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough Disk space available for Docker.\e[0m"
+          echo "At least 10 GBs recommended. You have $$(numfmt --to iec $$((disk_available * 1024 )))"
+          echo
+          warning_resources="true"
+        fi
+        if [[ $${warning_resources} == "true" ]]; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: You have not enough resources to run Airflow (see above)!\e[0m"
+          echo "Please follow the instructions to increase amount of resources available:"
+          echo "   https://airflow.apache.org/docs/apache-airflow/stable/start/docker.html#before-you-begin"
+          echo
+        fi
+        mkdir -p /sources/airflow/logs /sources/airflow/dags /sources/airflow/plugins
+        chown -R "${AIRFLOW_UID}:0" /sources/airflow/{logs,dags,plugins}
+        exec /entrypoint airflow version
+    # yamllint enable rule:line-length
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      _PIP_ADDITIONAL_REQUIREMENTS: ''
+    user: "0:0"
+    # volumes: - .:/sources - монтирует текущий рабочий каталог в /sources внутри контейнера.
+    # Это может использоваться, чтобы предоставить настройки или скрипты для настройки Apache Airflow.
+    volumes:
+      - .:/sources
+
+  # Этот контейнер предоставляет среду для выполнения команд Apache Airflow из командной строки и 
+  # может использоваться для разработки, отладки и управления Apache Airflow на уровне командной строки
+  # Контейнер airflow-cli предназначен для запуска командной строки Apache Airflow.
+  airflow-cli:
+    <<: *airflow-common
+    # profiles: - debug - это конфигурация, связанная с профилями, которая включает профиль debug.
+    #  Профили в Apache Airflow - это способ настроить различные параметры конфигурации для разных окружений.
+    profiles:
+      - debug
+    environment:
+      <<: *airflow-common-env
+      CONNECTION_CHECK_MAX_COUNT: "0"
+    # Workaround for entrypoint issue. See: https://github.com/apache/airflow/issues/16252
+    # command - это команда, которая будет выполнена при запуске контейнера. В данном случае, 
+    # контейнер запускает команду bash -c airflow, что позволяет выполнить команды Apache Airflow из 
+    # командной строки. Это полезно, например, для запуска операций управления DAG, выполнения тестов и так далее.
+    command:
+      - bash
+      - -c
+      - airflow
+
+  # You can enable flower by adding "--profile flower" option e.g. docker-compose --profile flower up
+  # or by explicitly targeted on the command line e.g. docker-compose up flower.
+  # See: https://docs.docker.com/compose/profiles/
+  # Этот блок контейнера flower предназначен для запуска Flower, что является веб-интерфейсом и мониторингом
+  #  для брокера сообщений Celery (который также используется Apache Airflow)
+  flower:
+    <<: *airflow-common
+    # command: celery flower - задает команду, которую следует выполнить при запуске контейнера. В данном 
+    # случае, контейнер будет запускать Flower для мониторинга брокера Celery
+    command: celery flower
+    profiles:
+      - flower
+    # healthcheck - это настройки для проверки здоровья контейнера. Они определяют, как проверяется
+    #  состояние контейнера. В данном случае, контейнер ожидает, что сервис Flower будет доступен по адресу http://localhost:5555/.
+    ports:
+      - 5555:5555
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    # depends_on - определяет зависимости контейера от других сервисов. Здесь контейнер flower зависит от
+    # успешного завершения сервиса airflow-init, что означает, что flower не будет запущен до тех пор, 
+    # пока сервис airflow-init успешно не завершит инициализацию Airflow. Это важно, чтобы убедиться, 
+    # что Airflow полностью готов к использованию, прежде чем запускать Flower для мониторинга
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-db-volume:
+  db_vol:
+  

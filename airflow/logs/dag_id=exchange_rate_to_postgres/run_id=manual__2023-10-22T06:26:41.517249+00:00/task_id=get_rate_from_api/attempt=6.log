@@ -1,0 +1,41 @@
+[2023-10-22 06:27:17,566] {taskinstance.py:1179} INFO - Dependencies all met for <TaskInstance: exchange_rate_to_postgres.get_rate_from_api manual__2023-10-22T06:26:41.517249+00:00 [queued]>
+[2023-10-22 06:27:17,581] {taskinstance.py:1179} INFO - Dependencies all met for <TaskInstance: exchange_rate_to_postgres.get_rate_from_api manual__2023-10-22T06:26:41.517249+00:00 [queued]>
+[2023-10-22 06:27:17,582] {taskinstance.py:1376} INFO - 
+--------------------------------------------------------------------------------
+[2023-10-22 06:27:17,583] {taskinstance.py:1377} INFO - Starting attempt 6 of 6
+[2023-10-22 06:27:17,584] {taskinstance.py:1378} INFO - 
+--------------------------------------------------------------------------------
+[2023-10-22 06:27:17,602] {taskinstance.py:1397} INFO - Executing <Task(PythonOperator): get_rate_from_api> on 2023-10-22 06:26:41.517249+00:00
+[2023-10-22 06:27:17,608] {standard_task_runner.py:52} INFO - Started process 4078 to run task
+[2023-10-22 06:27:17,614] {standard_task_runner.py:79} INFO - Running: ['***', 'tasks', 'run', 'exchange_rate_to_postgres', 'get_rate_from_api', 'manual__2023-10-22T06:26:41.517249+00:00', '--job-id', '20', '--raw', '--subdir', 'DAGS_FOLDER/get_exchange_rate.py', '--cfg-path', '/tmp/tmpn40lm4zq', '--error-file', '/tmp/tmp68gi9xc4']
+[2023-10-22 06:27:17,615] {standard_task_runner.py:80} INFO - Job 20: Subtask get_rate_from_api
+[2023-10-22 06:27:17,711] {task_command.py:371} INFO - Running <TaskInstance: exchange_rate_to_postgres.get_rate_from_api manual__2023-10-22T06:26:41.517249+00:00 [running]> on host 7fbc45d826e5
+[2023-10-22 06:27:17,808] {taskinstance.py:1591} INFO - Exporting the following env vars:
+AIRFLOW_CTX_DAG_OWNER=andrey
+AIRFLOW_CTX_DAG_ID=exchange_rate_to_postgres
+AIRFLOW_CTX_TASK_ID=get_rate_from_api
+AIRFLOW_CTX_EXECUTION_DATE=2023-10-22T06:26:41.517249+00:00
+AIRFLOW_CTX_TRY_NUMBER=6
+AIRFLOW_CTX_DAG_RUN_ID=manual__2023-10-22T06:26:41.517249+00:00
+[2023-10-22 06:27:18,634] {logging_mixin.py:115} INFO - ######### datetime_rate:  1697956023
+[2023-10-22 06:27:18,635] {logging_mixin.py:115} INFO - ########## value_rate:  2875406.58516
+[2023-10-22 06:27:18,654] {base.py:68} INFO - Using connection ID 'conn_exchange_rate' for task execution.
+[2023-10-22 06:27:18,668] {taskinstance.py:1909} ERROR - Task failed with exception
+Traceback (most recent call last):
+  File "/home/airflow/.local/lib/python3.7/site-packages/airflow/operators/python.py", line 171, in execute
+    return_value = self.execute_callable()
+  File "/home/airflow/.local/lib/python3.7/site-packages/airflow/operators/python.py", line 189, in execute_callable
+    return self.python_callable(*self.op_args, **self.op_kwargs)
+  File "/opt/airflow/dags/get_exchange_rate.py", line 35, in get_exchange_rate
+    VALUES (to_timestamp({datetime_rate}), {SOURCE}, {CURRENCIES}, {value_rate})""")
+psycopg2.errors.UndefinedColumn: column "btc" does not exist
+LINE 2: ...                VALUES (to_timestamp(1697956023), BTC, RUB, ...
+                                                             ^
+
+[2023-10-22 06:27:18,684] {taskinstance.py:1420} INFO - Marking task as FAILED. dag_id=exchange_rate_to_***, task_id=get_rate_from_api, execution_date=20231022T062641, start_date=20231022T062717, end_date=20231022T062718
+[2023-10-22 06:27:18,701] {standard_task_runner.py:97} ERROR - Failed to execute job 20 for task get_rate_from_api (column "btc" does not exist
+LINE 2: ...                VALUES (to_timestamp(1697956023), BTC, RUB, ...
+                                                             ^
+; 4078)
+[2023-10-22 06:27:18,753] {local_task_job.py:156} INFO - Task exited with return code 1
+[2023-10-22 06:27:18,812] {local_task_job.py:273} INFO - 0 downstream tasks scheduled from follow-on schedule check
